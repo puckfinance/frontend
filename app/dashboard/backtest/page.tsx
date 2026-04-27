@@ -1,44 +1,123 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect, useCallback } from "react";
 import { useSession } from "next-auth/react";
 import { AuthGuard } from "@/components/auth-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Skeleton } from "@/components/ui/skeleton";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
-  runBacktest,
-  type BacktestTrade,
-  type BacktestSummary,
-} from "@/lib/analysis-history";
-import {
-  Play,
-  Trophy,
-  XCircle,
-  Clock,
   TrendingUp,
   TrendingDown,
+  RefreshCw,
+  Activity,
   BarChart3,
-  Target,
+  Shield,
+  Brain,
   Loader2,
-  ArrowUpRight,
-  ArrowDownRight,
-  AlertTriangle,
+  DollarSign,
+  Calendar,
+  Anchor,
+  CandlestickChart,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  Trophy,
+  Target,
+  History,
 } from "lucide-react";
+import { TradeChart } from "@/components/analysis/trade-chart";
+
+const TIMEFRAME_SETS = [
+  { value: "higher", label: "Higher TF", short: "1D/4H/1H", description: "Swing analysis" },
+  { value: "lower", label: "Lower TF", short: "15m/5m", description: "Scalping analysis" },
+  { value: "all", label: "All TFs", short: "1D→5m", description: "Full multi-TF" },
+] as const;
 
 const SYMBOLS = [
-  { value: "", label: "All" },
-  { value: "BTC", label: "BTC" },
-  { value: "ETH", label: "ETH" },
-  { value: "SOL", label: "SOL" },
-  { value: "BNB", label: "BNB" },
-  { value: "XRP", label: "XRP" },
-  { value: "ADA", label: "ADA" },
-  { value: "DOGE", label: "DOGE" },
-  { value: "AVAX", label: "AVAX" },
-  { value: "LINK", label: "LINK" },
-  { value: "DOT", label: "DOT" },
+  { value: "BTC", label: "Bitcoin", short: "BTC" },
+  { value: "ETH", label: "Ethereum", short: "ETH" },
+  { value: "SOL", label: "Solana", short: "SOL" },
+  { value: "BNB", label: "BNB", short: "BNB" },
+  { value: "XRP", label: "XRP", short: "XRP" },
+  { value: "ADA", label: "Cardano", short: "ADA" },
+  { value: "DOGE", label: "Dogecoin", short: "DOGE" },
+  { value: "AVAX", label: "Avalanche", short: "AVAX" },
+  { value: "LINK", label: "Chainlink", short: "LINK" },
+  { value: "DOT", label: "Polkadot", short: "DOT" },
 ];
+
+interface MarketData {
+  symbol: string;
+  price: number;
+  priceChange24h: number;
+  priceChangePercentage24h: number;
+  marketCap: number;
+  volume24h: number;
+  ath: number;
+  fearGreedIndex: number;
+  fearGreedClassification: string;
+  keySupport: number;
+  keyResistance: number;
+  dxy: number;
+  eurusd: string;
+  gbpusd: string;
+  usdjpy: string;
+  upcomingEvents: any[];
+  whales: {
+    takerRatio: number;
+    takerTrend: string;
+    topTraderLongPct: number;
+    topTraderTrend: string;
+    oiValue: number;
+    oiChange24h: number;
+    onChainLargeTxs: number;
+    onChainVolumeBTC: number;
+  };
+  indicators: {
+    rsi: number;
+    rsiCondition: string;
+    rsi4h?: number;
+    rsi1h?: number;
+    rsi15m?: number;
+    rsi5m?: number;
+    macdHistogram: number;
+    macdTrend: string;
+    emaTrend: string;
+    alignedTimeframes: number;
+    totalCheckedTimeframes?: number;
+    bollingerSqueeze: boolean;
+    bollingerPercentB: number;
+    atr: number;
+    vwapRelation: string;
+    marketStructure: string;
+    fvgCount: number;
+    obCount: number;
+    conflictingSignals: string[];
+  };
+  isBacktest?: boolean;
+  targetDate?: string;
+}
+
+interface TradeAlert {
+  active: boolean;
+  direction: "LONG" | "SHORT" | "NONE";
+  entryPrice: number | null;
+  stopLoss: number | null;
+  takeProfit: number | null;
+  riskRewardRatio: number | null;
+  tradeSetup: string;
+  reasoning: string;
+}
+
+interface TradeResult {
+  result: "WIN" | "LOSS" | "PENDING";
+  hitAt: string | null;
+  currentPrice: number | null;
+}
 
 const formatUSD = (value: number) =>
   value.toLocaleString(undefined, {
@@ -46,293 +125,696 @@ const formatUSD = (value: number) =>
     maximumFractionDigits: 2,
   });
 
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
+const mdComponents: Record<string, React.FC<React.PropsWithChildren<any>>> = {
+  h1: ({ children }) => (
+    <h1 className="text-2xl font-bold text-foreground mt-8 mb-4 first:mt-0">{children}</h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="text-xl font-bold text-foreground mt-8 mb-3 pb-2 border-b border-border/40">{children}</h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="text-lg font-semibold text-foreground mt-6 mb-2">{children}</h3>
+  ),
+  p: ({ children }) => (
+    <p className="text-muted-foreground leading-7 mb-4">{children}</p>
+  ),
+  strong: ({ children }) => (
+    <strong className="font-semibold text-foreground">{children}</strong>
+  ),
+  ul: ({ children }) => (
+    <ul className="my-3 ml-4 space-y-1.5 list-none">{children}</ul>
+  ),
+  li: ({ children }) => (
+    <li className="text-muted-foreground leading-7 relative pl-5 before:content-[''] before:absolute before:left-0 before:top-[13px] before:h-1.5 before:w-1.5 before:rounded-full before:bg-primary/50">{children}</li>
+  ),
+  hr: () => <hr className="my-6 border-border/30" />,
+  code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
+    const isBlock = className?.includes("language-");
+    if (isBlock) {
+      return <code className="block bg-muted/50 rounded-lg p-4 text-sm font-mono text-foreground overflow-x-auto my-4 border border-border/20">{children}</code>;
+    }
+    return <code className="bg-primary/10 text-primary px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>;
+  },
+  pre: ({ children }) => <pre className="my-0">{children}</pre>,
+  table: ({ children }) => (
+    <div className="my-4 overflow-x-auto rounded-lg border border-border/30">
+      <table className="w-full text-sm">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => (
+    <th className="px-4 py-2.5 text-left font-semibold text-foreground">{children}</th>
+  ),
+  td: ({ children }) => (
+    <td className="px-4 py-2.5 text-muted-foreground border-t border-border/20">{children}</td>
+  ),
+};
 
-function ResultBadge({ result }: { result: string }) {
-  const config: Record<string, { icon: React.ReactNode; bg: string; text: string; label: string }> = {
-    WIN: {
-      icon: <Trophy className="h-3.5 w-3.5" />,
-      bg: "bg-green-500/10 border-green-500/20",
-      text: "text-green-500",
-      label: "TP Hit",
-    },
-    LOSS: {
-      icon: <XCircle className="h-3.5 w-3.5" />,
-      bg: "bg-red-500/10 border-red-500/20",
-      text: "text-red-500",
-      label: "SL Hit",
-    },
-    PENDING: {
-      icon: <Clock className="h-3.5 w-3.5" />,
-      bg: "bg-yellow-500/10 border-yellow-500/20",
-      text: "text-yellow-500",
-      label: "Pending",
-    },
-  };
-  const c = config[result];
-  if (!c) return null;
+function StreamingMarkdown({ content }: { content: string }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (containerRef.current) {
+      containerRef.current.scrollTop = containerRef.current.scrollHeight;
+    }
+  }, [content]);
 
   return (
-    <span className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full border ${c.bg} ${c.text}`}>
-      {c.icon} {c.label}
-    </span>
+    <div ref={containerRef} className="max-w-none overflow-y-auto">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        {content}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function TradeResultCard({ tradeResult, tradeAlert }: { tradeResult: TradeResult; tradeAlert: TradeAlert }) {
+  const isWin = tradeResult.result === "WIN";
+  const isLoss = tradeResult.result === "LOSS";
+
+  return (
+    <Card className={`border ${isWin ? "border-green-500/30 bg-green-500/5" : isLoss ? "border-red-500/30 bg-red-500/5" : "border-yellow-500/30 bg-yellow-500/5"}`}>
+      <CardHeader className="pb-3">
+        <CardTitle className="flex items-center gap-2 text-base">
+          {isWin ? (
+            <><Trophy className="h-5 w-5 text-green-500" /> Trade Result: TP Hit</>
+          ) : isLoss ? (
+            <><XCircle className="h-5 w-5 text-red-500" /> Trade Result: SL Hit</>
+          ) : (
+            <><Clock className="h-5 w-5 text-yellow-500" /> Trade Result: Pending</>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div>
+            <p className="text-xs text-muted-foreground">Direction</p>
+            <p className={`font-bold ${tradeAlert.direction === "LONG" ? "text-green-500" : "text-red-500"}`}>
+              {tradeAlert.direction}
+            </p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Entry</p>
+            <p className="font-bold font-mono">${tradeAlert.entryPrice ? formatUSD(tradeAlert.entryPrice) : "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Stop Loss</p>
+            <p className="font-bold font-mono text-red-500">${tradeAlert.stopLoss ? formatUSD(tradeAlert.stopLoss) : "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Take Profit</p>
+            <p className="font-bold font-mono text-green-500">${tradeAlert.takeProfit ? formatUSD(tradeAlert.takeProfit) : "N/A"}</p>
+          </div>
+          <div>
+            <p className="text-xs text-muted-foreground">Result</p>
+            <p className={`font-bold ${isWin ? "text-green-500" : isLoss ? "text-red-500" : "text-yellow-500"}`}>
+              {isWin ? "WIN" : isLoss ? "LOSS" : "PENDING"}
+            </p>
+          </div>
+        </div>
+        {tradeResult.hitAt && (
+          <p className="text-sm text-muted-foreground mt-3">
+            {isWin ? "TP Hit" : "SL Hit"} at: {new Date(tradeResult.hitAt).toLocaleString()}
+          </p>
+        )}
+        {tradeResult.currentPrice && (
+          <p className="text-xs text-muted-foreground mt-1">
+            Current price: ${formatUSD(tradeResult.currentPrice)}
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
 export default function BacktestPage() {
   const { data: session } = useSession();
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  const [symbol, setSymbol] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [selectedSymbol, setSelectedSymbol] = useState("BTC");
+  const [selectedTimeframeSet, setSelectedTimeframeSet] = useState<string>("all");
+  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedTime, setSelectedTime] = useState("12:00");
+  const [marketData, setMarketData] = useState<MarketData | null>(null);
+  const [streamedText, setStreamedText] = useState("");
+  const [isStreaming, setIsStreaming] = useState(false);
+  const [isLoadingData, setIsLoadingData] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [summary, setSummary] = useState<BacktestSummary | null>(null);
-  const [trades, setTrades] = useState<BacktestTrade[]>([]);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const [tradeAlert, setTradeAlert] = useState<TradeAlert | undefined>(undefined);
+  const [streamingDone, setStreamingDone] = useState(false);
+  const [tradeResult, setTradeResult] = useState<TradeResult | null>(null);
 
-  const handleRunBacktest = async () => {
-    if (!fromDate || !toDate) {
-      setError("Please select both from and to dates");
-      return;
-    }
-    try {
-      setLoading(true);
+  const startAnalysis = useCallback(
+    async (symbol?: string, tfSetOverride?: string) => {
+      const sym = symbol || selectedSymbol;
+      const tfSet = tfSetOverride || selectedTimeframeSet;
+
+      if (!selectedDate) {
+        setError("Please select a date first");
+        return;
+      }
+
+      const dateStr = `${selectedDate}T${selectedTime}:00`;
+      const targetDate = new Date(dateStr);
+      if (isNaN(targetDate.getTime())) {
+        setError("Invalid date/time");
+        return;
+      }
+      if (targetDate >= new Date()) {
+        setError("Date must be in the past");
+        return;
+      }
+
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
+      setIsStreaming(true);
+      setIsLoadingData(true);
+      setStreamedText("");
+      setMarketData(null);
       setError(null);
-      const result = await runBacktest({
-        from: new Date(fromDate).toISOString(),
-        to: new Date(toDate + "T23:59:59").toISOString(),
-        symbol: symbol || undefined,
-      });
-      setSummary(result.summary);
-      setTrades(result.trades);
-    } catch (err: any) {
-      setError(err.message || "Failed to run backtest");
-    } finally {
-      setLoading(false);
+      setTradeAlert(undefined);
+      setStreamingDone(false);
+      setTradeResult(null);
+
+      try {
+        const response = await fetch(
+          `/api/ai/backtest/stream?symbol=${sym}&date=${encodeURIComponent(targetDate.toISOString())}&timeframe=${tfSet}`,
+          { signal: controller.signal },
+        );
+
+        if (!response.ok) {
+          const errBody = await response.text();
+          throw new Error(errBody || `HTTP ${response.status}`);
+        }
+
+        const reader = response.body?.getReader();
+        if (!reader) throw new Error("No response body");
+
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        function processSSEEvents(text: string) {
+          const parts = text.split("\n\n");
+          for (const part of parts) {
+            const lines = part.split("\n");
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr) continue;
+
+              try {
+                const event = JSON.parse(jsonStr);
+
+                if (event.type === "market-data") {
+                  setMarketData(event.data);
+                  setIsLoadingData(false);
+                } else if (event.type === "text-delta") {
+                  setStreamedText((prev) => prev + event.data);
+                } else if (event.type === "trade-alert") {
+                  setTradeAlert(event.data);
+                } else if (event.type === "trade-result") {
+                  if (event.data) setTradeResult(event.data);
+                } else if (event.type === "error") {
+                  setError(event.data);
+                }
+              } catch {
+                // skip malformed
+              }
+            }
+          }
+        }
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          processSSEEvents(buffer);
+          buffer = "";
+        }
+
+        if (buffer.trim()) {
+          processSSEEvents(buffer);
+        }
+      } catch (err: any) {
+        if (err.name !== "AbortError") {
+          setError(err.message || "Failed to stream analysis");
+        }
+      } finally {
+        setIsStreaming(false);
+        setIsLoadingData(false);
+        setStreamingDone(true);
+      }
+    },
+    [selectedSymbol, selectedTimeframeSet, selectedDate, selectedTime],
+  );
+
+  const handleSymbolChange = (symbol: string) => {
+    setSelectedSymbol(symbol);
+    if (isStreaming) {
+      abortControllerRef.current?.abort();
+    }
+    if (streamedText || isStreaming) {
+      setTimeout(() => startAnalysis(symbol), 50);
     }
   };
 
-  const winRate = summary ? (summary.wins / (summary.wins + summary.losses || 1)) * 100 : 0;
+  const handleTimeframeSetChange = (tfSet: string) => {
+    setSelectedTimeframeSet(tfSet);
+    if (isStreaming) {
+      abortControllerRef.current?.abort();
+    }
+    if (streamedText || isStreaming) {
+      setTimeout(() => startAnalysis(undefined, tfSet), 50);
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      abortControllerRef.current?.abort();
+    };
+  }, []);
+
+  const isPositive = marketData ? marketData.priceChangePercentage24h >= 0 : false;
 
   return (
     <AuthGuard>
-      <div className="flex-1 space-y-6 p-4 md:p-8 pt-6">
-        <div>
-          <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
-            <BarChart3 className="h-8 w-8 text-primary" />
-            Backtest Trade Alerts
-          </h2>
-          <p className="text-muted-foreground text-sm mt-1">
-            Evaluate how AI trade alerts performed over a selected date range. Checks if price hit entry first, then evaluates TP/SL.
-          </p>
+      <div className="flex-1 space-y-4 p-4 md:p-8 pt-6">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+          <div>
+            <h2 className="text-3xl font-bold tracking-tight flex items-center gap-2">
+              <History className="h-8 w-8 text-primary" />
+              Backtest Analysis
+            </h2>
+            <p className="text-muted-foreground text-sm mt-1">
+              Pick a past date to run AI analysis on historical data, then see how the trade would have played out
+            </p>
+          </div>
+          <Button
+            onClick={() => startAnalysis()}
+            disabled={isStreaming || !selectedDate}
+            size="lg"
+            className="gap-2"
+          >
+            {isStreaming ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Analyzing {selectedSymbol}...
+              </>
+            ) : (
+              <>
+                <RefreshCw className="h-4 w-4" />
+                {streamedText ? `Re-analyze ${selectedSymbol}` : `Analyze ${selectedSymbol}`}
+              </>
+            )}
+          </Button>
         </div>
 
+        {/* Date/Time Picker */}
         <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
-          <CardHeader>
-            <CardTitle className="text-base">Configuration</CardTitle>
-          </CardHeader>
-          <CardContent>
+          <CardContent className="pt-4 pb-4">
             <div className="flex flex-col sm:flex-row gap-4 items-end">
               <div className="space-y-1.5 flex-1 min-w-[180px]">
-                <label className="text-sm font-medium text-muted-foreground">From Date</label>
+                <label className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
+                  <Calendar className="h-3.5 w-3.5" /> Date
+                </label>
                 <Input
                   type="date"
-                  value={fromDate}
-                  onChange={(e) => setFromDate(e.target.value)}
+                  value={selectedDate}
+                  onChange={(e) => setSelectedDate(e.target.value)}
+                  max={new Date().toISOString().split("T")[0]}
                   className="bg-background"
                 />
               </div>
-              <div className="space-y-1.5 flex-1 min-w-[180px]">
-                <label className="text-sm font-medium text-muted-foreground">To Date</label>
+              <div className="space-y-1.5 flex-1 min-w-[140px]">
+                <label className="text-sm font-medium text-muted-foreground">Time (UTC)</label>
                 <Input
-                  type="date"
-                  value={toDate}
-                  onChange={(e) => setToDate(e.target.value)}
+                  type="time"
+                  value={selectedTime}
+                  onChange={(e) => setSelectedTime(e.target.value)}
                   className="bg-background"
                 />
               </div>
-              <div className="space-y-1.5">
-                <label className="text-sm font-medium text-muted-foreground">Symbol</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {SYMBOLS.map((sym) => (
-                    <button
-                      key={sym.value}
-                      onClick={() => setSymbol(sym.value)}
-                      className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all border ${
-                        symbol === sym.value
-                          ? "bg-primary text-primary-foreground border-primary"
-                          : "bg-background/60 text-muted-foreground border-primary/10 hover:border-primary/30"
-                      }`}
-                    >
-                      {sym.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <Button
-                onClick={handleRunBacktest}
-                disabled={loading || !fromDate || !toDate}
-                className="gap-2 min-w-[140px]"
-              >
-                {loading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Play className="h-4 w-4" />
-                )}
-                {loading ? "Running..." : "Run Backtest"}
-              </Button>
             </div>
           </CardContent>
         </Card>
 
-        {error && (
-          <div className="bg-destructive/10 border border-destructive/20 rounded-lg p-4 text-destructive text-sm flex items-center gap-2">
-            <AlertTriangle className="h-4 w-4" />
-            {error}
+        {/* Symbol Selector */}
+        <div className="flex flex-wrap gap-2">
+          {SYMBOLS.map((sym) => (
+            <button
+              key={sym.value}
+              onClick={() => handleSymbolChange(sym.value)}
+              disabled={isStreaming}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                selectedSymbol === sym.value
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-background/60 text-muted-foreground border-primary/10 hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+              }`}
+            >
+              {sym.short}
+            </button>
+          ))}
+        </div>
+
+        {/* Timeframe Set Selector */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Timeframe Focus</span>
+          {TIMEFRAME_SETS.map((tf) => (
+            <button
+              key={tf.value}
+              onClick={() => handleTimeframeSetChange(tf.value)}
+              disabled={isStreaming}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                selectedTimeframeSet === tf.value
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-background/60 text-muted-foreground border-primary/10 hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+              }`}
+            >
+              <span>{tf.label}</span>
+              <span className="ml-1.5 text-xs opacity-70">({tf.short})</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Market Data Cards */}
+        <div className="grid gap-4 grid-cols-2 lg:grid-cols-4">
+          <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <CardTitle className="text-sm font-medium">
+                {selectedSymbol} Price
+              </CardTitle>
+              {isPositive ? (
+                <TrendingUp className="h-4 w-4 text-green-500" />
+              ) : (
+                <TrendingDown className="h-4 w-4 text-red-500" />
+              )}
+            </CardHeader>
+            <CardContent>
+              {isLoadingData || !marketData ? (
+                <Skeleton className="h-7 w-[140px]" />
+              ) : (
+                <>
+                  <div className="text-2xl font-bold font-mono">
+                    ${formatUSD(marketData.price)}
+                  </div>
+                  <p className={`text-xs mt-1 ${isPositive ? "text-green-500" : "text-red-500"}`}>
+                    {isPositive ? "+" : ""}
+                    {marketData.priceChangePercentage24h.toFixed(2)}% (24h)
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <CardTitle className="text-sm font-medium">Key Levels</CardTitle>
+              <Shield className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {isLoadingData || !marketData ? (
+                <Skeleton className="h-7 w-[130px]" />
+              ) : (
+                <>
+                  <div className="text-sm font-mono">
+                    <span className="text-green-500">S: ${formatUSD(marketData.keySupport)}</span>
+                  </div>
+                  <div className="text-sm font-mono mt-1">
+                    <span className="text-red-500">R: ${formatUSD(marketData.keyResistance)}</span>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <CardTitle className="text-sm font-medium">Backtest Date</CardTitle>
+              <Calendar className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {isLoadingData || !marketData ? (
+                <Skeleton className="h-7 w-[160px]" />
+              ) : (
+                <>
+                  <div className="text-lg font-bold">
+                    {marketData.targetDate ? new Date(marketData.targetDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "N/A"}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    {marketData.targetDate ? new Date(marketData.targetDate).toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" }) : ""} UTC
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all">
+            <CardHeader className="flex flex-row items-center justify-between pb-2 space-y-0">
+              <CardTitle className="text-sm font-medium">Market Structure</CardTitle>
+              <Activity className="h-4 w-4 text-muted-foreground" />
+            </CardHeader>
+            <CardContent>
+              {isLoadingData || !marketData ? (
+                <Skeleton className="h-7 w-[100px]" />
+              ) : (
+                <>
+                  <div className={`text-sm font-bold ${
+                    marketData.indicators.marketStructure === "bullish"
+                      ? "text-green-500"
+                      : marketData.indicators.marketStructure === "bearish"
+                      ? "text-red-500"
+                      : "text-yellow-500"
+                  }`}>
+                    {marketData.indicators.marketStructure?.toUpperCase()}
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    EMA: {marketData.indicators.emaTrend?.replace(/_/g, " ")}
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+
+        {/* Technical Indicators Row */}
+        {marketData?.indicators && (
+          <div className="grid gap-4 grid-cols-2 lg:grid-cols-5">
+            <Card className="bg-background/60 backdrop-blur-sm border-primary/10 transition-all">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-muted-foreground">RSI (14)</span>
+                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${
+                    marketData.indicators.rsiCondition === "overbought"
+                      ? "bg-red-500/20 text-red-400"
+                      : marketData.indicators.rsiCondition === "oversold"
+                      ? "bg-green-500/20 text-green-400"
+                      : "bg-muted text-muted-foreground"
+                  }`}>
+                    {marketData.indicators.rsiCondition}
+                  </span>
+                </div>
+                <div className="text-xl font-bold font-mono">
+                  {marketData.indicators.rsi?.toFixed(1)}
+                </div>
+                <div className="w-full bg-muted rounded-full h-1.5 mt-2">
+                  <div
+                    className={`h-1.5 rounded-full ${
+                      marketData.indicators.rsi > 70 ? "bg-red-500"
+                        : marketData.indicators.rsi < 30 ? "bg-green-500"
+                        : "bg-primary"
+                    }`}
+                    style={{ width: `${Math.min(100, marketData.indicators.rsi)}%` }}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2 mt-1 text-xs text-muted-foreground font-mono">
+                  {marketData.indicators.rsi4h != null && <span>4h: {marketData.indicators.rsi4h.toFixed(0)}</span>}
+                  {marketData.indicators.rsi1h != null && <span>1h: {marketData.indicators.rsi1h.toFixed(0)}</span>}
+                  {marketData.indicators.rsi15m != null && <span>15m: {marketData.indicators.rsi15m.toFixed(0)}</span>}
+                  {marketData.indicators.rsi5m != null && <span>5m: {marketData.indicators.rsi5m.toFixed(0)}</span>}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-background/60 backdrop-blur-sm border-primary/10 transition-all">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-muted-foreground">MACD</span>
+                  <span className={`text-xs font-medium ${
+                    marketData.indicators.macdTrend === "bullish" ? "text-green-500" : "text-red-500"
+                  }`}>
+                    {marketData.indicators.macdTrend}
+                  </span>
+                </div>
+                <div className={`text-xl font-bold font-mono ${
+                  marketData.indicators.macdHistogram > 0 ? "text-green-500" : "text-red-500"
+                }`}>
+                  {marketData.indicators.macdHistogram > 0 ? "+" : ""}
+                  {marketData.indicators.macdHistogram?.toFixed(1)}
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">Histogram</p>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-background/60 backdrop-blur-sm border-primary/10 transition-all">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-muted-foreground">EMA Trend</span>
+                </div>
+                <div className={`text-sm font-bold ${
+                  marketData.indicators.emaTrend?.includes("bullish")
+                    ? "text-green-500"
+                    : marketData.indicators.emaTrend?.includes("bearish")
+                    ? "text-red-500"
+                    : "text-yellow-500"
+                }`}>
+                  {marketData.indicators.emaTrend?.replace(/_/g, " ").toUpperCase()}
+                </div>
+                <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
+                  <span>{marketData.indicators.alignedTimeframes}/{marketData.indicators.totalCheckedTimeframes ?? 5} TF</span>
+                  <span>VWAP: {marketData.indicators.vwapRelation}</span>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-background/60 backdrop-blur-sm border-primary/10 transition-all">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-muted-foreground">Structure</span>
+                </div>
+                <div className={`text-sm font-bold ${
+                  marketData.indicators.marketStructure === "bullish"
+                    ? "text-green-500"
+                    : marketData.indicators.marketStructure === "bearish"
+                    ? "text-red-500"
+                    : "text-yellow-500"
+                }`}>
+                  {marketData.indicators.marketStructure?.toUpperCase()}
+                </div>
+                <div className="flex gap-2 mt-1">
+                  {marketData.indicators.fvgCount > 0 && (
+                    <span className="text-xs text-muted-foreground">{marketData.indicators.fvgCount} FVG</span>
+                  )}
+                  {marketData.indicators.obCount > 0 && (
+                    <span className="text-xs text-muted-foreground">{marketData.indicators.obCount} OB</span>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="bg-background/60 backdrop-blur-sm border-primary/10 transition-all">
+              <CardContent className="pt-4 pb-3">
+                <div className="flex justify-between items-center mb-1">
+                  <span className="text-xs text-muted-foreground">BBands</span>
+                  {marketData.indicators.bollingerSqueeze && (
+                    <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-400">
+                      SQUEEZE
+                    </span>
+                  )}
+                </div>
+                <div className="text-xl font-bold font-mono">
+                  {(marketData.indicators.bollingerPercentB * 100)?.toFixed(0)}%
+                </div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  ATR: ${marketData.indicators.atr?.toLocaleString()}
+                </p>
+              </CardContent>
+            </Card>
           </div>
         )}
 
-        {summary && (
-          <>
-            <div className="grid gap-4 grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
-              <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Total Alerts</p>
-                  <p className="text-2xl font-bold">{summary.totalAnalyses}</p>
-                </CardContent>
-              </Card>
-              <Card className="bg-background/60 backdrop-blur-sm border-green-500/20">
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Wins (TP Hit)</p>
-                  <p className="text-2xl font-bold text-green-500 flex items-center gap-1">
-                    <Trophy className="h-5 w-5" />
-                    {summary.wins}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className="bg-background/60 backdrop-blur-sm border-red-500/20">
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Losses (SL Hit)</p>
-                  <p className="text-2xl font-bold text-red-500 flex items-center gap-1">
-                    <XCircle className="h-5 w-5" />
-                    {summary.losses}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className="bg-background/60 backdrop-blur-sm border-yellow-500/20">
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Pending</p>
-                  <p className="text-2xl font-bold text-yellow-500 flex items-center gap-1">
-                    <Clock className="h-5 w-5" />
-                    {summary.pending}
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className={`bg-background/60 backdrop-blur-sm border-${winRate >= 50 ? "green" : "red"}-500/20`}>
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Win Rate</p>
-                  <p className={`text-2xl font-bold ${winRate >= 50 ? "text-green-500" : "text-red-500"}`}>
-                    {winRate.toFixed(1)}%
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {summary.wins + summary.losses} resolved
-                  </p>
-                </CardContent>
-              </Card>
-              <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
-                <CardContent className="pt-4 pb-4">
-                  <p className="text-xs text-muted-foreground">Entry Not Hit</p>
-                  <p className="text-2xl font-bold text-muted-foreground">
-                    {summary.entryNotHit}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Avg RR: {summary.avgRiskReward.toFixed(2)}:1
-                  </p>
-                </CardContent>
-              </Card>
-            </div>
-
-            {trades.length > 0 && (
-              <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <Target className="h-5 w-5 text-primary" />
-                    Trade-by-Trade Results
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border/40">
-                          <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Date</th>
-                          <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Symbol</th>
-                          <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Direction</th>
-                          <th className="px-3 py-2 text-right font-semibold text-muted-foreground">Entry</th>
-                          <th className="px-3 py-2 text-right font-semibold text-muted-foreground">SL</th>
-                          <th className="px-3 py-2 text-right font-semibold text-muted-foreground">TP</th>
-                          <th className="px-3 py-2 text-right font-semibold text-muted-foreground">RR</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">Entry Hit</th>
-                          <th className="px-3 py-2 text-center font-semibold text-muted-foreground">Result</th>
-                          <th className="px-3 py-2 text-left font-semibold text-muted-foreground">Hit At</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {trades.map((t) => (
-                          <tr key={t.id} className="border-b border-border/20 hover:bg-muted/30 transition-colors">
-                            <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">
-                              {formatDate(t.createdAt)}
-                            </td>
-                            <td className="px-3 py-2.5 font-semibold">{t.symbol}</td>
-                            <td className="px-3 py-2.5">
-                              <span className={`inline-flex items-center gap-1 text-xs font-medium ${
-                                t.direction === "LONG" ? "text-green-500" : "text-red-500"
-                              }`}>
-                                {t.direction === "LONG" ? (
-                                  <ArrowUpRight className="h-3.5 w-3.5" />
-                                ) : (
-                                  <ArrowDownRight className="h-3.5 w-3.5" />
-                                )}
-                                {t.direction}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono">${formatUSD(t.entryPrice)}</td>
-                            <td className="px-3 py-2.5 text-right font-mono text-red-500">${formatUSD(t.stopLoss)}</td>
-                            <td className="px-3 py-2.5 text-right font-mono text-green-500">${formatUSD(t.takeProfit)}</td>
-                            <td className="px-3 py-2.5 text-right font-mono">
-                              {t.riskReward != null ? `${t.riskReward}:1` : "—"}
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              {t.entryHit ? (
-                                <span className="text-green-500 text-xs">Yes</span>
-                              ) : (
-                                <span className="text-muted-foreground text-xs">No</span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-center">
-                              <ResultBadge result={t.result} />
-                            </td>
-                            <td className="px-3 py-2.5 text-muted-foreground text-xs whitespace-nowrap">
-                              {t.hitAt ? formatDate(t.hitAt) : "—"}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+        {/* Price Chart - only renders after streaming completes */}
+        {marketData && streamingDone && (
+          <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all">
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CandlestickChart className="h-5 w-5 text-primary" />
+                  {selectedSymbol}/USDT Chart
+                </div>
+                {tradeAlert?.active && tradeAlert.direction !== "NONE" && (
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-medium px-2.5 py-1 rounded-full ${
+                      tradeAlert.direction === "LONG"
+                        ? "bg-green-500/15 text-green-500 border border-green-500/20"
+                        : "bg-red-500/15 text-red-500 border border-red-500/20"
+                    }`}>
+                      {tradeAlert.direction === "LONG" ? "\uD83D\uDFE2" : "\uD83D\uDD34"} {tradeAlert.direction}
+                    </span>
+                    {tradeAlert.riskRewardRatio && (
+                      <span className="text-xs font-medium px-2.5 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">
+                        R:R {tradeAlert.riskRewardRatio}:1
+                      </span>
+                    )}
                   </div>
-                </CardContent>
-              </Card>
-            )}
-          </>
+                )}
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <TradeChart marketData={{ ...marketData, tradeAlert }} selectedSymbol={selectedSymbol} />
+            </CardContent>
+          </Card>
         )}
+
+        {/* Trade Result — shown after analysis completes with trade alert */}
+        {streamingDone && tradeResult && tradeAlert?.active && tradeAlert.direction !== "NONE" && (
+          <TradeResultCard tradeResult={tradeResult} tradeAlert={tradeAlert} />
+        )}
+
+        {/* AI Analysis Stream */}
+        <Card className="bg-background/60 backdrop-blur-sm border-primary/10 hover:shadow-md hover:border-primary/20 transition-all max-w-5xl mx-auto w-full">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Brain className="h-5 w-5 text-primary" />
+              AI Backtest Analysis
+              {isStreaming && (
+                <span className="inline-flex items-center gap-1.5 text-xs font-normal text-primary bg-primary/10 px-2 py-0.5 rounded-full">
+                  <span className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
+                  Streaming
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {error && (
+              <div className="rounded-lg bg-destructive/10 border border-destructive/20 p-4 mb-4">
+                <p className="text-destructive text-sm">{error}</p>
+              </div>
+            )}
+
+            {!streamedText && !isStreaming && !error && (
+              <div className="flex flex-col items-center justify-center py-16 text-center">
+                <History className="h-16 w-16 text-muted-foreground/30 mb-4" />
+                <h3 className="text-lg font-medium text-muted-foreground mb-2">
+                  Ready to Backtest
+                </h3>
+                <p className="text-sm text-muted-foreground/70 max-w-md">
+                  Select a past date and time, choose a coin, and click &quot;Analyze&quot; to run AI analysis on historical market data. After the analysis, the trade result will be automatically evaluated.
+                </p>
+              </div>
+            )}
+
+            {(streamedText || isStreaming) && (
+              <div className="min-h-[400px]">
+                {isLoadingData && !streamedText && (
+                  <div className="flex items-center gap-3 text-muted-foreground mb-4">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span className="text-sm">
+                      Fetching {selectedSymbol} historical candle data from Binance...
+                    </span>
+                  </div>
+                )}
+                <StreamingMarkdown content={streamedText} />
+                {isStreaming && (
+                  <span className="inline-block w-2 h-5 bg-primary animate-pulse ml-0.5 align-text-bottom" />
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </AuthGuard>
   );
