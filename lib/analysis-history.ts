@@ -135,6 +135,55 @@ export async function getTradeResult(
 /**
  * Delete an analysis by ID
  */
+export interface BacktestTrade {
+  id: string;
+  symbol: string;
+  createdAt: string;
+  direction: string;
+  entryPrice: number;
+  stopLoss: number;
+  takeProfit: number;
+  riskReward: number | null;
+  result: "WIN" | "LOSS" | "PENDING" | "NO_TRADE";
+  hitAt: string | null;
+  entryHit: boolean;
+  setup: string | null;
+  verdict: string | null;
+  confidence: number | null;
+  error?: string;
+}
+
+export interface BacktestSummary {
+  totalAnalyses: number;
+  wins: number;
+  losses: number;
+  pending: number;
+  entryNotHit: number;
+  winRate: number;
+  avgRiskReward: number;
+  dateRange: { from: string; to: string };
+}
+
+export interface BacktestResponse {
+  success: boolean;
+  summary: BacktestSummary;
+  trades: BacktestTrade[];
+}
+
+export async function runBacktest(params: {
+  from: string;
+  to: string;
+  symbol?: string;
+}): Promise<BacktestResponse> {
+  const res = await fetch(`${API_URL}/api/v1/analysis-history/backtest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) throw new Error(`Failed to run backtest: ${res.status}`);
+  return res.json();
+}
+
 export async function deleteAnalysis(id: string): Promise<void> {
   const res = await fetch(`${API_URL}/api/v1/analysis-history/${id}`, {
     method: "DELETE",

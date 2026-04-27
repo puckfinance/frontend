@@ -20,6 +20,7 @@ const navItems: NavItem[] = [
   { label: "Dashboard", href: "/dashboard", requiresAuth: true },
   { label: "AI Analysis", href: "/dashboard/analysis", requiresAuth: true },
   { label: "Analysis History", href: "/dashboard/analysis-history", requiresAuth: true },
+  { label: "Backtest", href: "/dashboard/backtest", requiresAuth: true },
   { label: "Trade Accounts", href: "/trade-accounts", requiresAuth: true },
 ];
 
