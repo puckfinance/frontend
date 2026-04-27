@@ -25,6 +25,12 @@ import {
 import { TradeChart } from "@/components/analysis/trade-chart";
 import { TradeExecutor } from "@/components/analysis/trade-executor";
 
+const TIMEFRAME_SETS = [
+  { value: "higher", label: "Higher TF", short: "1D/4H/1H", description: "Swing analysis" },
+  { value: "lower", label: "Lower TF", short: "15m/5m", description: "Scalping analysis" },
+  { value: "all", label: "All TFs", short: "1D→5m", description: "Full multi-TF" },
+] as const;
+
 const SYMBOLS = [
   { value: "BTC", label: "Bitcoin", short: "BTC" },
   { value: "ETH", label: "Ethereum", short: "ETH" },
@@ -79,6 +85,8 @@ interface MarketData {
     rsiCondition: string;
     rsi4h: number;
     rsi1h: number;
+    rsi15m?: number;
+    rsi5m?: number;
     macdHistogram: number;
     macdTrend: string;
     emaTrend: string;
@@ -91,6 +99,7 @@ interface MarketData {
     fvgCount: number;
     obCount: number;
     conflictingSignals: string[];
+    totalCheckedTimeframes?: number;
   };
   tradeAlert?: {
     active: boolean;
@@ -236,6 +245,7 @@ function StreamingMarkdown({ content }: { content: string }) {
 export default function CryptoAnalysisPage() {
   const { data: session } = useSession();
   const [selectedSymbol, setSelectedSymbol] = useState("BTC");
+  const [selectedTimeframeSet, setSelectedTimeframeSet] = useState<string>("all");
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [streamedText, setStreamedText] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -245,9 +255,20 @@ export default function CryptoAnalysisPage() {
   const [tradeAlert, setTradeAlert] = useState<MarketData["tradeAlert"]>(undefined);
   const [streamingDone, setStreamingDone] = useState(false);
 
+  const handleTimeframeSetChange = (tfSet: string) => {
+    setSelectedTimeframeSet(tfSet);
+    if (isStreaming) {
+      abortControllerRef.current?.abort();
+    }
+    if (streamedText || isStreaming) {
+      setTimeout(() => startAnalysis(undefined, tfSet), 50);
+    }
+  };
+
   const startAnalysis = useCallback(
-    async (symbol?: string) => {
+    async (symbol?: string, tfSetOverride?: string) => {
       const sym = symbol || selectedSymbol;
+      const tfSet = tfSetOverride || selectedTimeframeSet;
 
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
@@ -266,7 +287,7 @@ export default function CryptoAnalysisPage() {
 
       try {
         const response = await fetch(
-          `${process.env.NEXT_PUBLIC_API_URL}/api/v1/ai/analysis/stream?symbol=${sym}`,
+          `/api/ai/analysis/stream?symbol=${sym}&timeframe=${tfSet}`,
           { signal: controller.signal }
         );
 
@@ -280,37 +301,46 @@ export default function CryptoAnalysisPage() {
         const decoder = new TextDecoder();
         let buffer = "";
 
+        function processSSEEvents(text: string) {
+          const parts = text.split("\n\n");
+          for (const part of parts) {
+            const lines = part.split("\n");
+            for (const line of lines) {
+              if (!line.startsWith("data: ")) continue;
+              const jsonStr = line.slice(6).trim();
+              if (!jsonStr) continue;
+
+              try {
+                const event = JSON.parse(jsonStr);
+
+                if (event.type === "market-data") {
+                  setMarketData(event.data);
+                  setIsLoadingData(false);
+                } else if (event.type === "text-delta") {
+                  setStreamedText((prev) => prev + event.data);
+                } else if (event.type === "trade-alert") {
+                  setTradeAlert(event.data);
+                } else if (event.type === "error") {
+                  setError(event.data);
+                }
+              } catch {
+                // skip malformed
+              }
+            }
+          }
+        }
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           buffer += decoder.decode(value, { stream: true });
+          processSSEEvents(buffer);
+          buffer = "";
+        }
 
-          const lines = buffer.split("\n");
-          buffer = lines.pop() || "";
-
-          for (const line of lines) {
-            if (!line.startsWith("data: ")) continue;
-            const jsonStr = line.slice(6).trim();
-            if (!jsonStr) continue;
-
-            try {
-              const event = JSON.parse(jsonStr);
-
-              if (event.type === "market-data") {
-                setMarketData(event.data);
-                setIsLoadingData(false);
-              } else if (event.type === "text-delta") {
-                setStreamedText((prev) => prev + event.data);
-              } else if (event.type === "trade-alert") {
-                setTradeAlert(event.data);
-              } else if (event.type === "error") {
-                setError(event.data);
-              }
-            } catch {
-              // skip malformed
-            }
-          }
+        if (buffer.trim()) {
+          processSSEEvents(buffer);
         }
       } catch (err: any) {
         if (err.name !== "AbortError") {
@@ -322,7 +352,7 @@ export default function CryptoAnalysisPage() {
         setStreamingDone(true);
       }
     },
-    [selectedSymbol]
+    [selectedSymbol, selectedTimeframeSet]
   );
 
   const handleSymbolChange = (symbol: string) => {
@@ -395,6 +425,26 @@ export default function CryptoAnalysisPage() {
               }`}
             >
               {sym.short}
+            </button>
+          ))}
+        </div>
+
+        {/* Timeframe Set Selector */}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider">Timeframe Focus</span>
+          {TIMEFRAME_SETS.map((tf) => (
+            <button
+              key={tf.value}
+              onClick={() => handleTimeframeSetChange(tf.value)}
+              disabled={isStreaming}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all border ${
+                selectedTimeframeSet === tf.value
+                  ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                  : "bg-background/60 text-muted-foreground border-primary/10 hover:border-primary/30 hover:text-foreground disabled:opacity-50"
+              }`}
+            >
+              <span>{tf.label}</span>
+              <span className="ml-1.5 text-xs opacity-70">({tf.short})</span>
             </button>
           ))}
         </div>
@@ -661,9 +711,11 @@ export default function CryptoAnalysisPage() {
                     }}
                   />
                 </div>
-                <div className="flex gap-2 mt-1 text-xs text-muted-foreground font-mono">
-                  <span>4h: {marketData.indicators.rsi4h?.toFixed(0)}</span>
-                  <span>1h: {marketData.indicators.rsi1h?.toFixed(0)}</span>
+                <div className="flex flex-wrap gap-2 mt-1 text-xs text-muted-foreground font-mono">
+                  {marketData.indicators.rsi4h != null && <span>4h: {marketData.indicators.rsi4h.toFixed(0)}</span>}
+                  {marketData.indicators.rsi1h != null && <span>1h: {marketData.indicators.rsi1h.toFixed(0)}</span>}
+                  {marketData.indicators.rsi15m != null && <span>15m: {marketData.indicators.rsi15m.toFixed(0)}</span>}
+                  {marketData.indicators.rsi5m != null && <span>5m: {marketData.indicators.rsi5m.toFixed(0)}</span>}
                 </div>
               </CardContent>
             </Card>
@@ -715,7 +767,7 @@ export default function CryptoAnalysisPage() {
                     .toUpperCase()}
                 </div>
                 <div className="flex gap-2 mt-1 text-xs text-muted-foreground">
-                  <span>{marketData.indicators.alignedTimeframes}/3 TF</span>
+                  <span>{marketData.indicators.alignedTimeframes}/{marketData.indicators.totalCheckedTimeframes ?? 5} TF</span>
                   <span>VWAP: {marketData.indicators.vwapRelation}</span>
                 </div>
               </CardContent>
