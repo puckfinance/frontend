@@ -9,6 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { DayPicker } from "react-day-picker";
+import { format, subDays, subMonths } from "date-fns";
+import "react-day-picker/style.css";
 import {
   TrendingUp,
   TrendingDown,
@@ -18,16 +21,14 @@ import {
   Shield,
   Brain,
   Loader2,
-  DollarSign,
   Calendar,
-  Anchor,
   CandlestickChart,
   Clock,
-  CheckCircle2,
   XCircle,
   Trophy,
-  Target,
   History,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { TradeChart } from "@/components/analysis/trade-chart";
 
@@ -100,6 +101,7 @@ interface MarketData {
   };
   isBacktest?: boolean;
   targetDate?: string;
+  dailyKlines?: Array<{ time: number; open: number; high: number; low: number; close: number }>;
 }
 
 interface TradeAlert {
@@ -250,8 +252,9 @@ export default function BacktestPage() {
   const { data: session } = useSession();
   const [selectedSymbol, setSelectedSymbol] = useState("BTC");
   const [selectedTimeframeSet, setSelectedTimeframeSet] = useState<string>("all");
-  const [selectedDate, setSelectedDate] = useState("");
+  const [selectedDate, setSelectedDate] = useState<Date | undefined>(undefined);
   const [selectedTime, setSelectedTime] = useState("12:00");
+  const [showCalendar, setShowCalendar] = useState(false);
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [streamedText, setStreamedText] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
@@ -272,7 +275,7 @@ export default function BacktestPage() {
         return;
       }
 
-      const dateStr = `${selectedDate}T${selectedTime}:00`;
+      const dateStr = `${format(selectedDate, "yyyy-MM-dd")}T${selectedTime}:00`;
       const targetDate = new Date(dateStr);
       if (isNaN(targetDate.getTime())) {
         setError("Invalid date/time");
@@ -433,30 +436,79 @@ export default function BacktestPage() {
           </Button>
         </div>
 
-        {/* Date/Time Picker */}
+        {/* Date Picker */}
         <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
           <CardContent className="pt-4 pb-4">
-            <div className="flex flex-col sm:flex-row gap-4 items-end">
-              <div className="space-y-1.5 flex-1 min-w-[180px]">
-                <label className="text-sm font-medium text-muted-foreground flex items-center gap-1.5">
-                  <Calendar className="h-3.5 w-3.5" /> Date
-                </label>
-                <Input
-                  type="date"
-                  value={selectedDate}
-                  onChange={(e) => setSelectedDate(e.target.value)}
-                  max={new Date().toISOString().split("T")[0]}
-                  className="bg-background"
-                />
+            <div className="flex flex-col gap-4">
+              {/* Quick presets */}
+              <div className="flex flex-wrap gap-2">
+                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider self-center">Quick Pick</span>
+                {[
+                  { label: "1 Week Ago", date: subDays(new Date(), 7) },
+                  { label: "2 Weeks Ago", date: subDays(new Date(), 14) },
+                  { label: "1 Month Ago", date: subMonths(new Date(), 1) },
+                  { label: "3 Months Ago", date: subMonths(new Date(), 3) },
+                  { label: "6 Months Ago", date: subMonths(new Date(), 6) },
+                  { label: "1 Year Ago", date: subMonths(new Date(), 12) },
+                ].map((preset) => (
+                  <button
+                    key={preset.label}
+                    onClick={() => {
+                      setSelectedDate(preset.date);
+                      setShowCalendar(false);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
+                      selectedDate && format(selectedDate, "yyyy-MM-dd") === format(preset.date, "yyyy-MM-dd")
+                        ? "bg-primary text-primary-foreground border-primary shadow-sm"
+                        : "bg-background/60 text-muted-foreground border-primary/10 hover:border-primary/30 hover:text-foreground"
+                    }`}
+                  >
+                    {preset.label}
+                  </button>
+                ))}
               </div>
-              <div className="space-y-1.5 flex-1 min-w-[140px]">
-                <label className="text-sm font-medium text-muted-foreground">Time (UTC)</label>
-                <Input
-                  type="time"
-                  value={selectedTime}
-                  onChange={(e) => setSelectedTime(e.target.value)}
-                  className="bg-background"
-                />
+
+              <div className="flex flex-col sm:flex-row gap-4 items-start">
+                {/* Date display + calendar toggle */}
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={() => setShowCalendar(!showCalendar)}
+                    className={`flex items-center gap-2 px-4 py-2.5 rounded-lg border transition-all ${
+                      selectedDate ? "border-primary/40 bg-primary/5" : "border-primary/10 bg-background/60 hover:border-primary/30"
+                    }`}
+                  >
+                    <Calendar className="h-4 w-4 text-primary" />
+                    <span className={`text-sm font-medium ${selectedDate ? "text-foreground" : "text-muted-foreground"}`}>
+                      {selectedDate ? format(selectedDate, "MMM d, yyyy") : "Pick a date..."}
+                    </span>
+                  </button>
+
+                  {showCalendar && (
+                    <div className="border border-primary/20 rounded-xl bg-background p-3 shadow-lg">
+                      <DayPicker
+                        mode="single"
+                        selected={selectedDate}
+                        onSelect={(d) => {
+                          setSelectedDate(d);
+                          setShowCalendar(false);
+                        }}
+                        disabled={{ after: new Date() }}
+                        defaultMonth={selectedDate || subMonths(new Date(), 1)}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* Time picker */}
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium text-muted-foreground">Time (UTC)</label>
+                  <Input
+                    type="time"
+                    value={selectedTime}
+                    onChange={(e) => setSelectedTime(e.target.value)}
+                    className="bg-background w-[140px]"
+                  />
+                </div>
               </div>
             </div>
           </CardContent>
@@ -754,7 +806,7 @@ export default function BacktestPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <TradeChart marketData={{ ...marketData, tradeAlert }} selectedSymbol={selectedSymbol} />
+              <TradeChart marketData={{ ...marketData, tradeAlert }} selectedSymbol={selectedSymbol} historicalKlines={marketData.dailyKlines} />
             </CardContent>
           </Card>
         )}

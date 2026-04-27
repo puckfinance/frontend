@@ -38,6 +38,7 @@ interface MarketData {
 interface TradeChartProps {
   marketData: MarketData;
   selectedSymbol: string;
+  historicalKlines?: BinanceKline[];
 }
 
 const BINANCE_SYMBOL_MAP: Record<string, string> = {
@@ -86,7 +87,7 @@ function isDarkMode(): boolean {
   return document.documentElement.classList.contains("dark");
 }
 
-export function TradeChart({ marketData, selectedSymbol }: TradeChartProps) {
+export function TradeChart({ marketData, selectedSymbol, historicalKlines }: TradeChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
@@ -147,7 +148,11 @@ export function TradeChart({ marketData, selectedSymbol }: TradeChartProps) {
     // Load klines then draw everything
     let cancelled = false;
 
-    fetchKlines(selectedSymbol).then((klines) => {
+    const loadKlines = historicalKlines && historicalKlines.length > 0
+      ? Promise.resolve(historicalKlines)
+      : fetchKlines(selectedSymbol);
+
+    loadKlines.then((klines) => {
       if (cancelled) return;
 
       series.setData(klines as CandlestickData<Time>[]);
@@ -225,7 +230,7 @@ export function TradeChart({ marketData, selectedSymbol }: TradeChartProps) {
       chartRef.current = null;
       seriesRef.current = null;
     };
-  }, [marketData, selectedSymbol]);
+  }, [marketData, selectedSymbol, historicalKlines]);
 
   return (
     <div ref={containerRef} className="w-full h-[400px] md:h-[480px]" />
