@@ -272,12 +272,14 @@ export default function BacktestPage() {
     done: zodSchema(z.any()),
   }), []);
 
+  const transport = useMemo(() => new DefaultChatTransport({
+    api: `${apiUrl}/api/v1/ai/backtest/stream`,
+  }), [apiUrl]);
+
   const { messages, sendMessage, status, stop, setMessages, error: chatError } = useChat({
     id: "backtest",
     dataPartSchemas,
-    transport: new DefaultChatTransport({
-      api: `${apiUrl}/api/v1/ai/backtest/stream`,
-    }),
+    transport,
     onFinish: () => {
       setStreamingDone(true);
     },

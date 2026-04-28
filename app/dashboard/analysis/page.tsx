@@ -2,7 +2,7 @@
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
-import { useChat, type UIMessage } from "@ai-sdk/react";
+import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport, zodSchema } from "ai";
 import { z } from "zod";
 import { AuthGuard } from "@/components/auth-guard";
@@ -261,12 +261,14 @@ export default function CryptoAnalysisPage() {
     done: zodSchema(z.any()),
   }), []);
 
+  const transport = useMemo(() => new DefaultChatTransport({
+    api: `${apiUrl}/api/v1/ai/analysis/stream`,
+  }), [apiUrl]);
+
   const { messages, sendMessage, status, stop, setMessages, error: chatError } = useChat({
     id: "analysis",
     dataPartSchemas,
-    transport: new DefaultChatTransport({
-      api: `${apiUrl}/api/v1/ai/analysis/stream`,
-    }),
+    transport,
     onFinish: () => {
       setStreamingDone(true);
     },
