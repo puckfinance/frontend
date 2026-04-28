@@ -266,7 +266,6 @@ export default function CryptoAnalysisPage() {
     dataPartSchemas,
     transport: new DefaultChatTransport({
       api: `${apiUrl}/api/v1/ai/analysis/stream`,
-      credentials: "include",
     }),
     onFinish: () => {
       setStreamingDone(true);

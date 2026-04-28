@@ -277,7 +277,6 @@ export default function BacktestPage() {
     dataPartSchemas,
     transport: new DefaultChatTransport({
       api: `${apiUrl}/api/v1/ai/backtest/stream`,
-      credentials: "include",
     }),
     onFinish: () => {
       setStreamingDone(true);
