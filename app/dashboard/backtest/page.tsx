@@ -1,7 +1,10 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
+import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport, zodSchema } from "ai";
+import { z } from "zod";
 import { AuthGuard } from "@/components/auth-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -256,14 +259,62 @@ export default function BacktestPage() {
   const [selectedTime, setSelectedTime] = useState("12:00");
   const [showCalendar, setShowCalendar] = useState(false);
   const [marketData, setMarketData] = useState<MarketData | null>(null);
-  const [streamedText, setStreamedText] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isLoadingData, setIsLoadingData] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const [tradeAlert, setTradeAlert] = useState<TradeAlert | undefined>(undefined);
   const [streamingDone, setStreamingDone] = useState(false);
   const [tradeResult, setTradeResult] = useState<TradeResult | null>(null);
+
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8083";
+
+  const dataPartSchemas = useMemo(() => ({
+    marketData: zodSchema(z.any()),
+    tradeAlert: zodSchema(z.any()),
+    tradeResult: zodSchema(z.any()),
+    done: zodSchema(z.any()),
+  }), []);
+
+  const { messages, sendMessage, status, stop, setMessages, error: chatError } = useChat({
+    id: "backtest",
+    dataPartSchemas,
+    transport: new DefaultChatTransport({
+      api: `${apiUrl}/api/v1/ai/backtest/stream`,
+      credentials: "include",
+    }),
+    onFinish: () => {
+      setStreamingDone(true);
+    },
+    onError: (err) => {
+      console.error("Backtest chat error:", err);
+    },
+  });
+
+  const isStreaming = status === "streaming" || status === "submitted";
+  const streamedText = useMemo(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return "";
+    return last.parts
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  }, [messages]);
+
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return;
+    for (const part of last.parts) {
+      if (part.type === "data-marketData") {
+        setMarketData((part as any).data as MarketData);
+      }
+      if (part.type === "data-tradeAlert") {
+        setTradeAlert((part as any).data as TradeAlert);
+      }
+      if (part.type === "data-tradeResult") {
+        if ((part as any).data) setTradeResult((part as any).data as TradeResult);
+      }
+    }
+  }, [messages]);
+
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const error = chatError?.message ?? validationError ?? null;
 
   const startAnalysis = useCallback(
     async (symbol?: string, tfSetOverride?: string) => {
@@ -271,114 +322,39 @@ export default function BacktestPage() {
       const tfSet = tfSetOverride || selectedTimeframeSet;
 
       if (!selectedDate) {
-        setError("Please select a date first");
+        setValidationError("Please select a date first");
         return;
       }
 
       const dateStr = `${format(selectedDate, "yyyy-MM-dd")}T${selectedTime}:00`;
       const targetDate = new Date(dateStr);
       if (isNaN(targetDate.getTime())) {
-        setError("Invalid date/time");
+        setValidationError("Invalid date/time");
         return;
       }
       if (targetDate >= new Date()) {
-        setError("Date must be in the past");
+        setValidationError("Date must be in the past");
         return;
       }
 
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      setIsStreaming(true);
-      setIsLoadingData(true);
-      setStreamedText("");
+      setValidationError(null);
       setMarketData(null);
-      setError(null);
       setTradeAlert(undefined);
       setStreamingDone(false);
       setTradeResult(null);
 
-      try {
-        const response = await fetch(
-          `/api/ai/backtest/stream?symbol=${sym}&date=${encodeURIComponent(targetDate.toISOString())}&timeframe=${tfSet}`,
-          { signal: controller.signal },
-        );
-
-        if (!response.ok) {
-          const errBody = await response.text();
-          throw new Error(errBody || `HTTP ${response.status}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        function processSSEEvents(text: string) {
-          const parts = text.split("\n\n");
-          for (const part of parts) {
-            const lines = part.split("\n");
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const jsonStr = line.slice(6).trim();
-              if (!jsonStr) continue;
-
-              try {
-                const event = JSON.parse(jsonStr);
-
-                if (event.type === "market-data") {
-                  setMarketData(event.data);
-                  setIsLoadingData(false);
-                } else if (event.type === "text-delta") {
-                  setStreamedText((prev) => prev + event.data);
-                } else if (event.type === "trade-alert") {
-                  setTradeAlert(event.data);
-                } else if (event.type === "trade-result") {
-                  if (event.data) setTradeResult(event.data);
-                } else if (event.type === "error") {
-                  setError(event.data);
-                }
-              } catch {
-                // skip malformed
-              }
-            }
-          }
-        }
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          processSSEEvents(buffer);
-          buffer = "";
-        }
-
-        if (buffer.trim()) {
-          processSSEEvents(buffer);
-        }
-      } catch (err: any) {
-        if (err.name !== "AbortError") {
-          setError(err.message || "Failed to stream analysis");
-        }
-      } finally {
-        setIsStreaming(false);
-        setIsLoadingData(false);
-        setStreamingDone(true);
-      }
+      await sendMessage(
+        { text: `Backtest ${sym} at ${targetDate.toISOString()} with timeframe ${tfSet}` },
+        { body: { symbol: sym, date: targetDate.toISOString(), timeframe: tfSet } },
+      );
     },
-    [selectedSymbol, selectedTimeframeSet, selectedDate, selectedTime],
+    [selectedSymbol, selectedTimeframeSet, selectedDate, selectedTime, sendMessage],
   );
 
   const handleSymbolChange = (symbol: string) => {
     setSelectedSymbol(symbol);
     if (isStreaming) {
-      abortControllerRef.current?.abort();
+      stop();
     }
     if (streamedText || isStreaming) {
       setTimeout(() => startAnalysis(symbol), 50);
@@ -388,7 +364,7 @@ export default function BacktestPage() {
   const handleTimeframeSetChange = (tfSet: string) => {
     setSelectedTimeframeSet(tfSet);
     if (isStreaming) {
-      abortControllerRef.current?.abort();
+      stop();
     }
     if (streamedText || isStreaming) {
       setTimeout(() => startAnalysis(undefined, tfSet), 50);
@@ -397,11 +373,12 @@ export default function BacktestPage() {
 
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
+      stop();
     };
-  }, []);
+  }, [stop]);
 
   const isPositive = marketData ? marketData.priceChangePercentage24h >= 0 : false;
+  const isLoadingData = isStreaming && !marketData;
 
   return (
     <AuthGuard>

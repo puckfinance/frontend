@@ -1,7 +1,10 @@
 "use client";
 
-import React, { useState, useRef, useEffect, useCallback } from "react";
+import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useSession } from "next-auth/react";
+import { useChat, type UIMessage } from "@ai-sdk/react";
+import { DefaultChatTransport, zodSchema } from "ai";
+import { z } from "zod";
 import { AuthGuard } from "@/components/auth-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -247,118 +250,86 @@ export default function CryptoAnalysisPage() {
   const [selectedSymbol, setSelectedSymbol] = useState("BTC");
   const [selectedTimeframeSet, setSelectedTimeframeSet] = useState<string>("all");
   const [marketData, setMarketData] = useState<MarketData | null>(null);
-  const [streamedText, setStreamedText] = useState("");
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [isLoadingData, setIsLoadingData] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
   const [tradeAlert, setTradeAlert] = useState<MarketData["tradeAlert"]>(undefined);
   const [streamingDone, setStreamingDone] = useState(false);
 
-  const handleTimeframeSetChange = (tfSet: string) => {
-    setSelectedTimeframeSet(tfSet);
-    if (isStreaming) {
-      abortControllerRef.current?.abort();
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8083";
+
+  const dataPartSchemas = useMemo(() => ({
+    marketData: zodSchema(z.any()),
+    tradeAlert: zodSchema(z.any()),
+    done: zodSchema(z.any()),
+  }), []);
+
+  const { messages, sendMessage, status, stop, setMessages, error: chatError } = useChat({
+    id: "analysis",
+    dataPartSchemas,
+    transport: new DefaultChatTransport({
+      api: `${apiUrl}/api/v1/ai/analysis/stream`,
+      credentials: "include",
+    }),
+    onFinish: () => {
+      setStreamingDone(true);
+    },
+    onError: (err) => {
+      console.error("Chat error:", err);
+    },
+  });
+
+  const isStreaming = status === "streaming" || status === "submitted";
+  const streamedText = useMemo(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return "";
+    return last.parts
+      .filter((p): p is { type: "text"; text: string } => p.type === "text")
+      .map((p) => p.text)
+      .join("");
+  }, [messages]);
+
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return;
+    for (const part of last.parts) {
+      if (part.type === "data-marketData") {
+        setMarketData((part as any).data as MarketData);
+      }
+      if (part.type === "data-tradeAlert") {
+        setTradeAlert((part as any).data);
+      }
     }
-    if (streamedText || isStreaming) {
-      setTimeout(() => startAnalysis(undefined, tfSet), 50);
-    }
-  };
+  }, [messages]);
 
   const startAnalysis = useCallback(
     async (symbol?: string, tfSetOverride?: string) => {
       const sym = symbol || selectedSymbol;
       const tfSet = tfSetOverride || selectedTimeframeSet;
 
-      if (abortControllerRef.current) {
-        abortControllerRef.current.abort();
-      }
-
-      const controller = new AbortController();
-      abortControllerRef.current = controller;
-
-      setIsStreaming(true);
-      setIsLoadingData(true);
-      setStreamedText("");
       setMarketData(null);
-      setError(null);
       setTradeAlert(undefined);
       setStreamingDone(false);
 
-      try {
-        const response = await fetch(
-          `/api/ai/analysis/stream?symbol=${sym}&timeframe=${tfSet}`,
-          { signal: controller.signal }
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-        }
-
-        const reader = response.body?.getReader();
-        if (!reader) throw new Error("No response body");
-
-        const decoder = new TextDecoder();
-        let buffer = "";
-
-        function processSSEEvents(text: string) {
-          const parts = text.split("\n\n");
-          for (const part of parts) {
-            const lines = part.split("\n");
-            for (const line of lines) {
-              if (!line.startsWith("data: ")) continue;
-              const jsonStr = line.slice(6).trim();
-              if (!jsonStr) continue;
-
-              try {
-                const event = JSON.parse(jsonStr);
-
-                if (event.type === "market-data") {
-                  setMarketData(event.data);
-                  setIsLoadingData(false);
-                } else if (event.type === "text-delta") {
-                  setStreamedText((prev) => prev + event.data);
-                } else if (event.type === "trade-alert") {
-                  setTradeAlert(event.data);
-                } else if (event.type === "error") {
-                  setError(event.data);
-                }
-              } catch {
-                // skip malformed
-              }
-            }
-          }
-        }
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          processSSEEvents(buffer);
-          buffer = "";
-        }
-
-        if (buffer.trim()) {
-          processSSEEvents(buffer);
-        }
-      } catch (err: any) {
-        if (err.name !== "AbortError") {
-          setError(err.message || "Failed to stream analysis");
-        }
-      } finally {
-        setIsStreaming(false);
-        setIsLoadingData(false);
-        setStreamingDone(true);
-      }
+      await sendMessage(
+        { text: `Analyze ${sym} with timeframe ${tfSet}` },
+        { body: { symbol: sym, timeframe: tfSet } },
+      );
     },
-    [selectedSymbol, selectedTimeframeSet]
+    [selectedSymbol, selectedTimeframeSet, sendMessage],
   );
+
+  const handleTimeframeSetChange = (tfSet: string) => {
+    setSelectedTimeframeSet(tfSet);
+    if (isStreaming) {
+      stop();
+    }
+    if (streamedText || isStreaming) {
+      setTimeout(() => startAnalysis(undefined, tfSet), 50);
+    }
+  };
 
   const handleSymbolChange = (symbol: string) => {
     setSelectedSymbol(symbol);
     if (isStreaming) {
-      abortControllerRef.current?.abort();
+      stop();
     }
     if (streamedText || isStreaming) {
       setTimeout(() => startAnalysis(symbol), 50);
@@ -367,13 +338,16 @@ export default function CryptoAnalysisPage() {
 
   useEffect(() => {
     return () => {
-      abortControllerRef.current?.abort();
+      stop();
     };
-  }, []);
+  }, [stop]);
 
   const isPositive = marketData
     ? marketData.priceChangePercentage24h >= 0
     : false;
+
+  const isLoadingData = isStreaming && !marketData;
+  const error = chatError?.message ?? null;
 
   return (
     <AuthGuard>
