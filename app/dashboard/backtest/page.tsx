@@ -783,7 +783,7 @@ export default function BacktestPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <TradeChart marketData={{ ...marketData, tradeAlert }} selectedSymbol={selectedSymbol} historicalKlines={marketData.dailyKlines} />
+              <TradeChart marketData={{ ...marketData, tradeAlert }} selectedSymbol={selectedSymbol} historicalKlines={marketData.dailyKlines as any} />
             </CardContent>
           </Card>
         )}
