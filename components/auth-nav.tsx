@@ -3,11 +3,17 @@
 import { useSession, signOut } from "next-auth/react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
+import { useEffect, useState } from "react";
 
 export function AuthNav() {
   const { data: session, status } = useSession();
+  const [mounted, setMounted] = useState(false);
 
-  if (status === "loading") {
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted || status === "loading") {
     return (
       <div className="animate-pulse h-10 w-32 bg-gray-200 rounded"></div>
     );
@@ -15,9 +21,9 @@ export function AuthNav() {
 
   if (session) {
     return (
-      <Button 
-        variant="default" 
-        size="sm" 
+      <Button
+        variant="default"
+        size="sm"
         onClick={() => signOut({ callbackUrl: "/" })}
       >
         Sign out

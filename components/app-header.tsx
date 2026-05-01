@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Menu } from "lucide-react";
 import { AuthNav } from "@/components/auth-nav";
 import { Separator } from "@/components/ui/separator";
@@ -26,14 +26,18 @@ const navItems: NavItem[] = [
 
 export function AppHeader() {
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const isAuthenticated = !!session;
   const [open, setOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   if (pathname === "/") return null;
 
-  // Filter nav items based on authentication status
-  const visibleNavItems = navItems.filter(item => !item.requiresAuth || isAuthenticated);
+  const visibleNavItems = mounted && status !== "loading" ? navItems.filter(item => !item.requiresAuth || isAuthenticated) : [];
 
   return (
     <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
