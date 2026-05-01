@@ -9,13 +9,28 @@ import { AuthGuard } from "@/components/auth-guard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { MessageResponse } from "@/components/ai-elements/message";
-import {
-  Tool,
-  ToolHeader,
-  ToolContent,
-  ToolOutput,
-} from "@/components/ai-elements/tool";
+import dynamic from "next/dynamic";
+
+const MessageResponse = dynamic(
+  () => import("@/components/ai-elements/message").then((m) => m.MessageResponse),
+  { ssr: false },
+);
+const Tool = dynamic(
+  () => import("@/components/ai-elements/tool").then((m) => m.Tool),
+  { ssr: false },
+);
+const ToolHeader = dynamic(
+  () => import("@/components/ai-elements/tool").then((m) => m.ToolHeader),
+  { ssr: false },
+);
+const ToolContent = dynamic(
+  () => import("@/components/ai-elements/tool").then((m) => m.ToolContent),
+  { ssr: false },
+);
+const ToolOutput = dynamic(
+  () => import("@/components/ai-elements/tool").then((m) => m.ToolOutput),
+  { ssr: false },
+);
 import {
   TrendingUp,
   TrendingDown,
