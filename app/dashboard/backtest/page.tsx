@@ -311,6 +311,14 @@ export default function BacktestPage() {
       if (part.type === "data-tradeResult") {
         if ((part as any).data) setTradeResult((part as any).data as TradeResult);
       }
+      if (part.type === "tool-generateTradeAlert") {
+        const toolPart = part as any;
+        if (toolPart.args) {
+          setTradeAlert(toolPart.args as TradeAlert);
+        } else if (toolPart.result) {
+          setTradeAlert(toolPart.result as TradeAlert);
+        }
+      }
     }
   }, [messages]);
 

@@ -297,6 +297,14 @@ export default function CryptoAnalysisPage() {
       if (part.type === "data-tradeAlert") {
         setTradeAlert((part as any).data);
       }
+      if (part.type === "tool-generateTradeAlert") {
+        const toolPart = part as any;
+        if (toolPart.args) {
+          setTradeAlert(toolPart.args);
+        } else if (toolPart.result) {
+          setTradeAlert(toolPart.result);
+        }
+      }
     }
   }, [messages]);
 
