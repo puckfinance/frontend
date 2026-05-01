@@ -10,8 +10,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { MessageResponse } from "@/components/ai-elements/message";
+import {
+  Tool,
+  ToolHeader,
+  ToolContent,
+  ToolOutput,
+} from "@/components/ai-elements/tool";
 import { DayPicker } from "react-day-picker";
 import { format, subDays, subMonths } from "date-fns";
 import "react-day-picker/style.css";
@@ -129,68 +134,6 @@ const formatUSD = (value: number) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   });
-
-const mdComponents: Record<string, React.FC<React.PropsWithChildren<any>>> = {
-  h1: ({ children }) => (
-    <h1 className="text-2xl font-bold text-foreground mt-8 mb-4 first:mt-0">{children}</h1>
-  ),
-  h2: ({ children }) => (
-    <h2 className="text-xl font-bold text-foreground mt-8 mb-3 pb-2 border-b border-border/40">{children}</h2>
-  ),
-  h3: ({ children }) => (
-    <h3 className="text-lg font-semibold text-foreground mt-6 mb-2">{children}</h3>
-  ),
-  p: ({ children }) => (
-    <p className="text-muted-foreground leading-7 mb-4">{children}</p>
-  ),
-  strong: ({ children }) => (
-    <strong className="font-semibold text-foreground">{children}</strong>
-  ),
-  ul: ({ children }) => (
-    <ul className="my-3 ml-4 space-y-1.5 list-none">{children}</ul>
-  ),
-  li: ({ children }) => (
-    <li className="text-muted-foreground leading-7 relative pl-5 before:content-[''] before:absolute before:left-0 before:top-[13px] before:h-1.5 before:w-1.5 before:rounded-full before:bg-primary/50">{children}</li>
-  ),
-  hr: () => <hr className="my-6 border-border/30" />,
-  code: ({ children, className }: { children?: React.ReactNode; className?: string }) => {
-    const isBlock = className?.includes("language-");
-    if (isBlock) {
-      return <code className="block bg-muted/50 rounded-lg p-4 text-sm font-mono text-foreground overflow-x-auto my-4 border border-border/20">{children}</code>;
-    }
-    return <code className="bg-primary/10 text-primary px-1.5 py-0.5 rounded text-sm font-mono">{children}</code>;
-  },
-  pre: ({ children }) => <pre className="my-0">{children}</pre>,
-  table: ({ children }) => (
-    <div className="my-4 overflow-x-auto rounded-lg border border-border/30">
-      <table className="w-full text-sm">{children}</table>
-    </div>
-  ),
-  th: ({ children }) => (
-    <th className="px-4 py-2.5 text-left font-semibold text-foreground">{children}</th>
-  ),
-  td: ({ children }) => (
-    <td className="px-4 py-2.5 text-muted-foreground border-t border-border/20">{children}</td>
-  ),
-};
-
-function StreamingMarkdown({ content }: { content: string }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (containerRef.current) {
-      containerRef.current.scrollTop = containerRef.current.scrollHeight;
-    }
-  }, [content]);
-
-  return (
-    <div ref={containerRef} className="max-w-none overflow-y-auto">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-}
 
 function TradeResultCard({ tradeResult, tradeAlert }: { tradeResult: TradeResult; tradeAlert: TradeAlert }) {
   const isWin = tradeResult.result === "WIN";
@@ -388,6 +331,12 @@ export default function BacktestPage() {
 
   const isPositive = marketData ? marketData.priceChangePercentage24h >= 0 : false;
   const isLoadingData = isStreaming && !marketData;
+
+  const toolPart = useMemo(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return null;
+    return last.parts.find((p: any) => p.type === "tool-generateTradeAlert") as any ?? null;
+  }, [messages]);
 
   return (
     <AuthGuard>
@@ -845,10 +794,28 @@ export default function BacktestPage() {
                     </span>
                   </div>
                 )}
-                <StreamingMarkdown content={streamedText} />
-                {isStreaming && (
+                <MessageResponse>{streamedText}</MessageResponse>
+                {isStreaming && !streamedText && (
                   <span className="inline-block w-2 h-5 bg-primary animate-pulse ml-0.5 align-text-bottom" />
                 )}
+              </div>
+            )}
+
+            {toolPart && (
+              <div className="mt-4">
+                <Tool defaultOpen={true}>
+                  <ToolHeader
+                    type="tool-generateTradeAlert"
+                    state={toolPart.state ?? "output-available"}
+                    title="Trade Signal"
+                  />
+                  <ToolContent>
+                    <ToolOutput
+                      output={toolPart.result ?? toolPart.args ?? tradeAlert}
+                      errorText={toolPart.errorText}
+                    />
+                  </ToolContent>
+                </Tool>
               </div>
             )}
           </CardContent>
