@@ -159,7 +159,7 @@ export function TradeChart({ marketData, selectedSymbol, historicalKlines }: Tra
       chart.timeScale().fitContent();
 
       const alert = marketData.tradeAlert;
-      const hasTrade = alert?.active && alert.direction !== "NONE" && alert.entryPrice;
+      const hasTrade = alert?.active && alert.direction !== "NONE" && alert.entryPrice != null && alert.entryPrice > 0;
 
       if (hasTrade) {
         // Entry - thick gold

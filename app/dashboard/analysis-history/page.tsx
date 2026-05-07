@@ -512,7 +512,7 @@ export default function AnalysisHistoryPage() {
                     price: d.price,
                     keySupport: d.keySupport,
                     keyResistance: d.keyResistance,
-                    tradeAlert: d.tradeAlertActive
+                    tradeAlert: d.tradeAlertActive && d.tradeAlertEntryPrice && d.tradeAlertEntryPrice > 0
                       ? {
                           active: true,
                           direction: (d.tradeAlertDirection || "NONE") as "LONG" | "SHORT" | "NONE",
@@ -547,7 +547,7 @@ export default function AnalysisHistoryPage() {
           </div>
 
           {/* AI Analysis Text */}
-          {d.analysisText && (
+          {d.analysisText && !d.analysisText.includes('undefinedundefined') && (
             <Card className="bg-background/60 backdrop-blur-sm border-primary/10">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
